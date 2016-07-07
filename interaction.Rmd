@@ -1,0 +1,510 @@
+---
+title: "Descriptive statistics for manuscript"
+author: "Tuomas Aivelo"
+output: html_document
+---
+
+
+First we start with loading required packages
+
+
+```{r, message=FALSE, warning=FALSE}
+deps = c("vegan","dae","plyr","scales","lme4","nlme");
+
+for (dep in deps){
+  if (dep %in% installed.packages()[,"Package"] == FALSE){
+    install.packages(as.character(dep), quiet=TRUE);
+  }
+  library(dep, verbose=FALSE, character.only=TRUE)
+}
+```
+
+Then we combine all the data and do some housekeeping on the data
+
+```{r}
+md <- read.csv(file="interaction_metadata.csv", sep=";", dec=",")
+otu.alpha <- read.table(file = "microbiota.ave-std.summary", 
+                        header = T)
+otu.alpha_ave <- subset(otu.alpha, method=="ave") 
+md <- merge(md,otu.alpha_ave, by="group")
+
+rownames(md) <- md$group
+nsamples <- nrow(md)
+o <- order(rownames(md))
+md <- md[o, ]
+et.count <- table(md$name)
+dup.name <- names(et.count[et.count>1])
+
+completeFun <- function(data, desiredCols) {
+  completeVec <- complete.cases(data[, desiredCols])
+  return(data[completeVec, ])
+}
+md <- completeFun(md, "cestode")
+
+md$week[md$week=="39"]<-40
+md$week[md$week=="44"]<-43
+```
+
+Let's start with richness, first with full model and then with reduced model
+
+```{r}
+anova(lme(sobs ~ pcrbatch+seqbatch+age+aggr+cond+sex+site+week+nematode+cestode+eimeria, data=md, random=~1|name))
+anova(lme(sobs ~ age+aggr+cond+sex+site+week+nematode+cestode+eimeria, data=md, random=~1|name))
+
+```
+
+Though if we reduce too much, even Eimeria is non-significant!
+
+```{r}
+anova(lme(sobs ~ eimeria, data=md, random=~1|name))
+```
+
+Let's use the more complete model to calculate the values.
+
+```{r}
+summary(lme(sobs ~ age+aggr+cond+sex+site+week+nematode+cestode+eimeria, data=md, random=~1|name))
+
+```
+
+Eimeria is the only significant covariate.
+
+And let's repeat this for diversity, as calculated by inverse Simpson index.
+
+```{r}
+anova( lme(invsimpson ~pcrbatch+seqbatch+age+aggr+cond+sex+site+week+nematode+cestode+eimeria+ecto, data=md, random=~1|name))
+anova(lme(invsimpson ~ eimeria, data=md, random=~1|name)) #all <0.05!
+summary(lme(invsimpson ~ age+aggr+cond+sex+site+week+nematode+cestode+eimeria+ecto, data=md, random=~1|name))
+
+```
+
+And the results are very similar as with richness: Eimeria is the only significant covariate.
+
+Let's generate the figures: first Figure 1a.
+
+```{r}
+multiple <- c("Anisha","Ari","Benja","Chewbacca","Cleopatra","Lasse","Laura","Lita","Napolean","Rachootin","Raleva") #mouse lemurs with multiple samples which were positive and negative for eimeria
+md_eim <- subset(md, name %in% multiple)
+md_noeim <- subset(md, !name %in% multiple)
+
+ggplot()+
+  geom_jitter(data=md_eim, aes(eimeria,sobs,color=eimeria),position=position_jitter(0.1))+
+  stat_summary(data=md_eim, aes(eimeria,sobs,color=eimeria),fun.y=median, geom="crossbar", ymax=-100, ymin=-100)+
+  geom_jitter(data=md_noeim, aes(eimeria,sobs),position=position_jitter(0.1),colour="grey")+
+  stat_summary(data=md, aes(eimeria,sobs),fun.y=median, geom="crossbar", ymax=-100, ymin=-100,colour="grey")+
+  labs(x="",y="Richness")+
+  theme(axis.text.x=element_blank(),
+        axis.text.y=element_text(colour="black"),
+        panel.background=element_rect(fill="white", colour="black"),
+        strip.background=element_blank())
+```
+And then Figure 1b
+```{r}
+ggplot()+
+  geom_jitter(data=md_eim, aes(eimeria,invsimpson,color=eimeria),position=position_jitter(0.1))+
+  stat_summary(data=md_eim, aes(eimeria,invsimpson,color=eimeria),fun.y=median, geom="crossbar", ymax=-100, ymin=-100)+
+  geom_jitter(data=md_noeim, aes(eimeria,invsimpson),position=position_jitter(0.1),colour="grey")+
+  stat_summary(data=md, aes(eimeria,invsimpson),fun.y=median, geom="crossbar", ymax=-100, ymin=-100,colour="grey")+
+  labs(x="",y="Diversity")+
+  theme(axis.text.x=element_blank(),
+        axis.text.y=element_text(colour="black"),
+        panel.background=element_rect(fill="white", colour="black"),
+        strip.background=element_blank())
+
+```
+
+Then we move to dissimilarity matrices which were presented in the Appendix of the manuscript.
+
+First we load them, and do some housekeeping.
+
+```{r}
+dist <- read.table(file = "yueclayton.dist", 
+                   skip = 1, row.names = 1)
+
+dist <- dist[row.names(dist) %in% md$group,]
+rownames(dist) <- gsub("^(.*)_16S", "\\1", rownames(dist))
+o <- order(rownames(dist))
+dist <- dist[o, o]
+stopifnot(sum(rownames(dist) != rownames(md)) == 0)
+yueclay <- dist
+thetayc <- as.dist(dist)
+
+dist <- read.table(file = "jaccard.dist", 
+                   skip = 1, row.names = 1)
+dist <- dist[row.names(dist) %in% md$group,]
+rownames(dist) <- gsub("^(.*)_16S", "\\1", rownames(dist))
+o <- order(rownames(dist))
+dist <- dist[o, o]
+stopifnot(sum(rownames(dist) != rownames(md)) == 0)
+jacc <- dist
+jclass <- as.dist(dist)
+
+dist <- read.table(file = "braycurtis.dist", 
+                   skip = 1, row.names = 1)
+dist <- dist[row.names(dist) %in% md$group,]
+rownames(dist) <- gsub("^(.*)_16S", "\\1", rownames(dist))
+o <- order(rownames(dist))
+dist <- dist[o, o]
+stopifnot(sum(rownames(dist) != rownames(md)) == 0)
+bray <- dist
+braycurtis <- as.dist(dist)
+
+
+dist <- read.table(file = "ochiai.dist", 
+                   skip = 1, row.names = 1)
+dist <- dist[row.names(dist) %in% md$group,]
+rownames(dist) <- gsub("^(.*)_16S", "\\1", rownames(dist))
+o <- order(rownames(dist))
+dist <- dist[o, o]
+mdo = md [-30,] 
+stopifnot(sum(rownames(dist) != rownames(mdo)) == 0)
+och <- dist
+ochiai <- as.dist(dist)
+
+md$week <- as.factor(md$week)
+```
+
+Next, we will do the permutational manovas.
+
+```{r}
+adonis(thetayc ~ md$age+md$cond+md$week+md$aggr+md$sex+md$site+md$nematode+md$hnana+md$hdiminuta+md$eimeria+md$ecto, strata = md$name, perm = 1000) 
+
+adonis(jclass ~ md$age+md$sex+md$site+md$nematode+md$hnana+md$week+md$hdiminuta+md$eimeria+md$ecto, strata=md$name, perm = 1000)
+
+adonis(braycurtis ~ md$seqbatch+md$age+md$sex+md$site+md$week+md$nematode+md$hnana+md$hdiminuta+md$eimeria+md$ecto, strata=md$name,perm = 1000)
+
+adonis(ochiai ~ mdo$week+mdo$age+mdo$sex+mdo$site+mdo$nematode+mdo$hnana+mdo$hdiminuta+mdo$eimeria+mdo$ecto,strata=mdo$name,perm = 1000) 
+
+```
+
+...and accompanying Figure SXX in Appendix 2. First Yue-Clayton:
+
+```{r}
+mod_yc <- metaMDS(thetayc)
+MDS1 <- as.numeric(mod_yc$points[,1])
+MDS2 <- as.numeric(mod_yc$points[,2])
+MDS <- cbind(MDS1, MDS2)
+row.names(MDS) <- row.names(md$points)
+MDS_yc <- data.frame(MDS)
+MDS_yc$ecto <- md$ecto
+MDS_yc$comb <- paste(md$ecto,md$hdiminuta, sep="_")
+MDS_yc_group <- as.factor(MDS_yc$ecto)
+
+find_hull <- function(MDS_yc) MDS_yc[chull(MDS_yc$MDS1,MDS_yc$MDS2), ]
+hulls <- ddply(MDS_yc, "MDS_yc_group", find_hull)
+hulls$ecto <- as.factor(hulls$ecto)
+
+ggplot(NULL, aes())+
+  geom_polygon(data=hulls, aes(MDS1,MDS2,fill=factor(ecto)), alpha=0.1)+
+  geom_point(data=MDS_yc, aes(MDS1,MDS2,shape=factor(comb)), alpha=1, size=4)+
+  scale_shape_manual(values=c(4,2,16,17))+
+  labs(title="Yue-Clayton \nEctoparasites", x="Axis 1",y="Axis 2")+
+  theme(axis.text=element_text(colour="black"),
+        legend.title=element_blank(),
+        panel.background=element_rect(fill="white", colour="black"))
+```
+
+Then Jaccard.
+
+```{r}
+
+mod_j <- metaMDS(jclass)
+MDS1 <- as.numeric(mod_j$points[,1])
+MDS2 <- as.numeric(mod_j$points[,2])
+MDS <- cbind(MDS1, MDS2)
+row.names(MDS) <- row.names(md$points)
+MDS_j <- data.frame(MDS)
+MDS_j$hdiminuta <- md$hdiminuta
+MDS_j$comb <- paste(md$ecto, md$hdiminuta, sep="_")
+MDS_j_group <- as.factor(MDS_j$hdiminuta)
+
+find_hull <- function(MDS_j) MDS_j[chull(MDS_j$MDS1,MDS_j$MDS2), ]
+hulls <- ddply(MDS_j, "MDS_j_group", find_hull)
+hulls$hdiminuta <- as.factor(hulls$hdiminuta)
+
+ggplot(NULL, aes())+
+  geom_polygon(data=hulls, aes(MDS1,MDS2,fill=factor(hdiminuta)), alpha=0.1)+
+  geom_point(data=MDS_j, aes(MDS1,MDS2,shape=factor(comb)), alpha=1, size=4)+
+  scale_shape_manual(values=c(4,2,16,17))+
+  labs(title="Jaccard \nH.diminuta", x="Axis 1",y="Axis 2")+
+  theme(axis.text=element_text(colour="black"),
+        legend.title=element_blank(),
+        panel.background=element_rect(fill="white", colour="black"))
+```
+
+Bray-Curtis:
+
+```{r}
+
+mod_bc <- metaMDS(braycurtis)
+MDS1 <- as.numeric(mod_bc$points[,1])
+MDS2 <- as.numeric(mod_bc$points[,2])
+MDS <- cbind(MDS1, MDS2)
+row.names(MDS) <- row.names(md$points)
+MDS_bc <- data.frame(MDS)
+MDS_bc$factor <- paste(md$ecto,md$hdiminuta, sep="_")
+MDS_bc_group <- as.factor(MDS_bc$factor)
+
+find_hull <- function(MDS_bc) MDS_bc[chull(MDS_bc$MDS1,MDS_bc$MDS2), ]
+hulls <- ddply(MDS_bc, "MDS_bc_group", find_hull)
+hulls$factor <- as.factor(hulls$factor)
+
+ggplot(NULL, aes(fill=factor(factor), shape=factor(factor)))+
+  geom_polygon(data=hulls, aes(MDS1,MDS2),alpha=0.1)+
+  geom_point(data=MDS_bc, aes(MDS1,MDS2), alpha=1, size=4)+
+  scale_shape_manual(values=c(4,2,16,17))+
+  labs(title="Bray-Curtis \nEctoparasites - H.diminuta", x="Axis 1",y="Axis 2")+
+  theme(axis.text=element_text(colour="black"),
+        legend.title=element_blank(),
+        panel.background=element_rect(fill="white", colour="black"))
+```
+
+No need for Ochiai as there were no significant variables.
+
+Next we go to group dispersion, which takes a bit of work because there is no ready-made replication within the #function. Thus we need take one sample per lemur and iterate this. First we create the needed iteration.
+
+```{r}
+names <- levels(droplevels(md$name))
+name_nr <- length(names)
+rows_with <- numeric(name_nr)
+```
+
+We define function resample() based on the documentation on sample()
+
+```{r}
+resample <- function(x, ...) x[sample.int(length(x), ...)]
+```
+
+Then we create null vectors and resample each distance matrix (5 parasites X 4 metrics):
+
+```{r}
+# creating vectors
+nema_yc_iter=NULL
+nema_bc_iter=NULL
+nema_j_iter=NULL
+nema_o_iter=NULL
+hnana_yc_iter=NULL
+hnana_bc_iter=NULL
+hnana_j_iter=NULL
+hnana_o_iter=NULL
+hdimi_yc_iter=NULL
+hdimi_bc_iter=NULL
+hdimi_j_iter=NULL
+hdimi_o_iter=NULL
+eim_yc_iter=NULL
+eim_bc_iter=NULL
+eim_j_iter=NULL
+eim_o_iter=NULL
+ecto_yc_iter=NULL
+ecto_bc_iter=NULL
+ecto_j_iter=NULL
+ecto_o_iter=NULL
+
+#resampling for each distance matrix
+
+for (i in 1:100){
+  
+  for(j in 1:name_nr){
+    rows_with[j] <- resample(which(md$name == names[j]),1)
+  }
+  
+  
+  rows_with <- sort(rows_with)
+  mdr <- md[rows_with,]
+  
+  thetayc2 <- as.dist(yueclay[rows_with,rows_with])
+  betadisper_ycnem <- betadisper(thetayc2,mdr$nematode)
+  anova(betadisper_ycnem)
+  perm <- permutest(betadisper_ycnem, pairwise=TRUE)
+  nema_yc_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_ychn <- betadisper(thetayc2,mdr$hnana)
+  anova(betadisper_ychn)
+  perm <- permutest(betadisper_ychn, pairwise=TRUE)
+  hnana_yc_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_ychd <- betadisper(thetayc2,mdr$hdiminuta)
+  anova(betadisper_ychd)
+  perm <- permutest(betadisper_ychd, pairwise=TRUE)
+  hdimi_yc_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_ycei <- betadisper(thetayc2,mdr$eimeria)
+  anova(betadisper_ycei)
+  perm <- permutest(betadisper_ycei, pairwise=TRUE)
+  eim_yc_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_ycec <- betadisper(thetayc2,mdr$ecto)
+  anova(betadisper_ycec)
+  perm <- permutest(betadisper_ycec, pairwise=TRUE)
+  ecto_yc_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+}
+
+for (i in 1:100){
+  
+  for(j in 1:name_nr){
+    rows_with[j] <- resample(which(md$name == names[j]),1)
+  }
+  
+  
+  rows_with <- sort(rows_with)
+  mdr <- md[rows_with,]
+  
+  thetayc2 <- as.dist(bray[rows_with,rows_with])
+  betadisper_bcnem <- betadisper(thetayc2,mdr$nematode)
+  anova(betadisper_bcnem)
+  perm <- permutest(betadisper_bcnem, pairwise=TRUE)
+  nema_bc_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_bchn <- betadisper(thetayc2,mdr$hnana)
+  anova(betadisper_bchn)
+  perm <- permutest(betadisper_bchn, pairwise=TRUE)
+  hnana_bc_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_bchd <- betadisper(thetayc2,mdr$hdiminuta)
+  anova(betadisper_bchd)
+  perm <- permutest(betadisper_bchd, pairwise=TRUE)
+  hdimi_bc_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_bcei <- betadisper(thetayc2,mdr$eimeria)
+  anova(betadisper_bcei)
+  perm <- permutest(betadisper_bcei, pairwise=TRUE)
+  eim_bc_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_bcec <- betadisper(thetayc2,mdr$ecto)
+  anova(betadisper_bcec)
+  perm <- permutest(betadisper_bcec, pairwise=TRUE)
+  ecto_bc_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+}
+for (i in 1:100){
+  
+  for(j in 1:name_nr){
+    rows_with[j] <- resample(which(md$name == names[j]),1)
+  }
+  
+  rows_with <- sort(rows_with)
+  mdr <- md[rows_with,]
+  
+  thetayc2 <- as.dist(jacc[rows_with,rows_with])
+  betadisper_jnem <- betadisper(thetayc2,mdr$nematode)
+  anova(betadisper_jnem)
+  perm <- permutest(betadisper_jnem, pairwise=TRUE)
+  nema_j_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_jhn <- betadisper(thetayc2,mdr$hnana)
+  anova(betadisper_jhn)
+  perm <- permutest(betadisper_jhn, pairwise=TRUE)
+  hnana_j_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_jhd <- betadisper(thetayc2,mdr$hdiminuta)
+  anova(betadisper_jhd)
+  perm <- permutest(betadisper_jhd, pairwise=TRUE)
+  hdimi_j_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_jei <- betadisper(thetayc2,mdr$eimeria)
+  anova(betadisper_jei)
+  perm <- permutest(betadisper_jei, pairwise=TRUE)
+  eim_j_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_jec <- betadisper(thetayc2,mdr$ecto)
+  anova(betadisper_jec)
+  perm <- permutest(betadisper_jec, pairwise=TRUE)
+  ecto_j_iter[i] = (perm$pairwise$observed[1]<0.05)
+}
+
+
+for (i in 1:100){
+  
+  for(j in 1:name_nr){
+    rows_with[j] <- resample(which(mdo$name == names[j]),1)
+  }
+  
+  rows_with <- sort(rows_with)
+  mdr <- mdo[rows_with,]
+  
+  thetayc2 <- as.dist(och[rows_with,rows_with])
+  betadisper_onem <- betadisper(thetayc2,mdr$nematode)
+  anova(betadisper_onem)
+  perm <- permutest(betadisper_onem, pairwise=TRUE)
+  nema_o_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_ohn <- betadisper(thetayc2,mdr$hnana)
+  anova(betadisper_ohn)
+  perm <- permutest(betadisper_ohn, pairwise=TRUE)
+  hnana_o_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_ohd <- betadisper(thetayc2,mdr$hdiminuta)
+  anova(betadisper_ohd)
+  perm <- permutest(betadisper_ohd, pairwise=TRUE)
+  hdimi_o_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_oei <- betadisper(thetayc2,mdr$eimeria)
+  anova(betadisper_oei)
+  perm <- permutest(betadisper_oei, pairwise=TRUE)
+  eim_o_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+  betadisper_oec <- betadisper(thetayc2,mdr$ecto)
+  anova(betadisper_oec)
+  perm <- permutest(betadisper_oec, pairwise=TRUE)
+  ecto_o_iter[i] = (perm$pairwise$observed[1]<0.05)
+  
+}
+```
+
+Then we calculate the positive samples:
+
+```{r, eval=FALSE}
+sum(hnana_bc_iter)
+sum(hnana_j_iter)
+sum(hnana_o_iter)
+sum(hnana_yc_iter)
+
+sum(hdimi_bc_iter)
+sum(hdimi_j_iter)
+sum(hdimi_o_iter)
+sum(hdimi_yc_iter)
+
+sum(nema_bc_iter)
+sum(nema_j_iter)
+sum(nema_o_iter)
+sum(nema_yc_iter)
+
+sum(eim_bc_iter)
+sum(eim_j_iter)
+sum(eim_o_iter)
+sum(eim_yc_iter)
+
+sum(ecto_bc_iter)
+sum(ecto_j_iter)
+sum(ecto_o_iter)
+sum(ecto_yc_iter)
+```
+
+These were the results I got from my definite run:
+
+Number of significant group dispersions with 100 iterations:
+	 	 	
+
+
+| | Jaccard | Ochiai | Bray-Curtis | Yue-Clayton |
+|------:|:-----|:---------|:------|:------|
+|H. diminuta|0|0|0|0|
+|H. nana|0|0|0|0|
+|Ectos|1|22|0|11|
+|Eimeria|8|4|0|0|
+|Nematode|0|11|4|10|	
+
+Last - and least - the effect of new infections on similarities
+
+```{r}
+simi_par <- read.csv(file="interaction_similarity.csv", sep=";", dec=",")
+simi_par$hnana <- as.factor(simi_par$hnana)
+simi_par$hdiminuta <- as.factor(simi_par$hdiminuta)
+simi_par$nematode <- as.factor(simi_par$nematode)
+simi_par$ecto <- as.factor(simi_par$ecto)
+simi_par$eimeria <- as.factor(simi_par$eimeria)
+
+anova(lme(simil_jac ~ nematode+hnana+hdiminuta+eimeria+ecto+total+days, data=simi_par, random=~1|name))
+
+anova(lme(simil_the ~ nematode+hnana+hdiminuta+eimeria+ecto+total+days, data=simi_par, random=~1|name))
+```
